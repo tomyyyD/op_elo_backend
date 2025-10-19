@@ -46,43 +46,6 @@ function calculateChange(eloChange, recentChange) {
   }
 }
 
-
-const getUsers = (request, response) => {
-  pool.query('SELECT * FROM users ORDER BY id ASC', (error, results) => {
-    if (error) {
-      console.error("[ERROR]: cannot SELECT from users table:", error.message);
-      return response.status(500).json({
-        error: "Database error",
-        message: "Failed to retrieve users"
-      });
-    }
-    response.status(200).json(results.rows);
-  });
-};
-
-const getUserById = (request, response) => {
-  const id = parseInt(request.params.id);
-  
-  if (isNaN(id)) {
-    console.error("[ERROR]: Invalid user ID provided:", request.params.id);
-    return response.status(400).json({
-      error: "Invalid input",
-      message: "User ID must be a valid number"
-    });
-  }
-  
-  pool.query('SELECT * FROM users WHERE id = $1', [id], (error, results) => {
-    if (error) {
-      console.error("[ERROR]: cannot SELECT user by ID:", error.message);
-      return response.status(500).json({
-        error: "Database error",
-        message: "Failed to retrieve user"
-      });
-    }
-    response.status(200).json(results.rows);
-  });
-};
-
 const getCharacters = (request, response) => {
   pool.query('SELECT * FROM characters ORDER BY elo DESC, first_name ASC', (error, results) => {
     if (error) {
@@ -239,9 +202,6 @@ const updateCharacterImages = async (request, response) => {
   }
 };
 
-app.get('/users', getUsers);
-app.get('/users/:id', getUserById);
-
 app.get('/characters', getCharacters);
 app.get('/characters/:id', getCharacterById);
 app.put('/characters/:id/elo', updateCharacterElo);
@@ -308,6 +268,10 @@ app.use((error, req, res, next) => {
   });
 });
 
+app.get('/', (req, res) => {
+  res.json({ message: 'API is running' });
+});
+
 // Handle 404 for undefined routes
 app.use((req, res) => {
   console.error(`[ERROR]: 404 - Route not found: ${req.method} ${req.originalUrl}`);
@@ -315,10 +279,6 @@ app.use((req, res) => {
     error: 'Route not found',
     message: `The requested route ${req.method} ${req.originalUrl} does not exist`
   });
-});
-
-app.get('/', (req, res) => {
-  res.json({ message: 'API is running' });
 });
 
 app.listen(port, () => {
