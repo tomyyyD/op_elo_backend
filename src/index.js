@@ -20,6 +20,16 @@ const pool = new Pool({
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+function calculateChange(eloChange, recentChange) {  
+  // Check if both changes have the same sign (both positive, both negative, or one is zero)
+  if ((eloChange >= 0 && recentChange >= 0) || (eloChange <= 0 && recentChange <= 0)) {
+    return recentChange + eloChange;
+  } else {
+    return eloChange;
+  }
+}
+
+
 const getUsers = (request, response) => {
   pool.query('SELECT * FROM users ORDER BY id ASC', (error, results) => {
     if (error) {
@@ -40,7 +50,7 @@ const getUserById = (request, response) => {
 };
 
 const getCharacters = (request, response) => {
-  pool.query('SELECT * FROM characters ORDER BY first_name ASC', (error, results) => {
+  pool.query('SELECT * FROM characters ORDER BY elo DESC, first_name ASC', (error, results) => {
     if (error) {
       throw error;
     }
@@ -60,63 +70,44 @@ const getCharacterById = (request, response) => {
 
 const updateCharacterElo = (request, response) => {
   const id = request.params.id;
-  const { wins, losses, elo, recent_change } = request.body;
+  const { wins_change, losses_change, elo_change, recent_change } = request.body;
   
-  // Validate that only the allowed fields are provided
-  const allowedFields = ['wins', 'losses', 'elo', 'recent_change'];
+  // Validate that all required fields are present
+  if (wins_change === undefined || losses_change === undefined || elo_change === undefined || recent_change === undefined) {
+    console.error(`[ERROR]: missing fields`);
+    return response.status(400).json({
+      error: 'Missing required fields',
+      message: 'All fields are required: wins_change, losses_change, elo_change, recent_change'
+    });
+  }
+  
+  // Validate that no extra fields are provided
+  const allowedFields = ['wins_change', 'losses_change', 'elo_change', 'recent_change'];
   const providedFields = Object.keys(request.body);
   const invalidFields = providedFields.filter(field => !allowedFields.includes(field));
   
   if (invalidFields.length > 0) {
+    console.error(`[ERROR]: invalid fields`);
     return response.status(400).json({
       error: 'Invalid fields provided',
-      message: `Only the following fields are allowed: ${allowedFields.join(', ')}`,
+      message: `Only these fields are allowed: ${allowedFields.join(', ')}`,
       invalidFields: invalidFields
     });
   }
+  const last_change = calculateChange(elo_change, recent_change);
   
-  // Build dynamic query based on provided fields
-  const updateFields = [];
-  const values = [];
-  let paramCount = 1;
+  // Use incremental updates to prevent race conditions
+  const query = `
+    UPDATE characters 
+    SET 
+      wins = wins + $1, 
+      losses = losses + $2, 
+      elo = elo + $3, 
+      recent_change = $4 
+    WHERE id = $5 
+    RETURNING *`;
   
-  if (wins !== undefined) {
-    updateFields.push(`wins = $${paramCount}`);
-    values.push(wins);
-    paramCount++;
-  }
-  
-  if (losses !== undefined) {
-    updateFields.push(`losses = $${paramCount}`);
-    values.push(losses);
-    paramCount++;
-  }
-  
-  if (elo !== undefined) {
-    updateFields.push(`elo = $${paramCount}`);
-    values.push(elo);
-    paramCount++;
-  }
-  
-  if (recent_change !== undefined) {
-    updateFields.push(`recent_change = $${paramCount}`);
-    values.push(recent_change);
-    paramCount++;
-  }
-  
-  if (updateFields.length === 0) {
-    return response.status(400).json({
-      error: 'No valid fields provided',
-      message: 'At least one of the following fields must be provided: wins, losses, elo, recent_change'
-    });
-  }
-  
-  // Add the character ID as the last parameter
-  values.push(id);
-  
-  const query = `UPDATE characters SET ${updateFields.join(', ')} WHERE id = $${paramCount} RETURNING *`;
-  
-  pool.query(query, values, (error, results) => {
+  pool.query(query, [wins_change, losses_change, elo_change, last_change, id], (error, results) => {
     if (error) {
       console.error('Error updating character ELO:', error);
       return response.status(500).json({
@@ -192,8 +183,6 @@ app.get('/image-proxy', async (req, res) => {
     if (!imageUrl) {
       return res.status(400).json({ error: 'URL parameter is required' });
     }
-    
-    // console.log(`Proxying image: ${imageUrl}`);
     
     const response = await axios({
       method: 'GET',
