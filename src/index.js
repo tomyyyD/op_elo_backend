@@ -17,6 +17,23 @@ const pool = new Pool({
   port: process.env.PG_PORT,
 });
 
+// Handle database connection errors
+pool.on('error', (err) => {
+  console.error('[ERROR]: Unexpected database error:', err.message);
+  console.error('Database connection lost. Attempting to reconnect...');
+});
+
+// Test database connection on startup
+pool.connect((err, client, release) => {
+  if (err) {
+    console.error('[ERROR]: Failed to connect to database on startup:', err.message);
+    process.exit(1); // Exit if we can't connect to the database
+  } else {
+    console.log('[SUCCESS]: Database connected successfully');
+    release();
+  }
+});
+
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
@@ -33,7 +50,11 @@ function calculateChange(eloChange, recentChange) {
 const getUsers = (request, response) => {
   pool.query('SELECT * FROM users ORDER BY id ASC', (error, results) => {
     if (error) {
-      throw error;
+      console.error("[ERROR]: cannot SELECT from users table:", error.message);
+      return response.status(500).json({
+        error: "Database error",
+        message: "Failed to retrieve users"
+      });
     }
     response.status(200).json(results.rows);
   });
@@ -41,9 +62,22 @@ const getUsers = (request, response) => {
 
 const getUserById = (request, response) => {
   const id = parseInt(request.params.id);
+  
+  if (isNaN(id)) {
+    console.error("[ERROR]: Invalid user ID provided:", request.params.id);
+    return response.status(400).json({
+      error: "Invalid input",
+      message: "User ID must be a valid number"
+    });
+  }
+  
   pool.query('SELECT * FROM users WHERE id = $1', [id], (error, results) => {
     if (error) {
-      throw error;
+      console.error("[ERROR]: cannot SELECT user by ID:", error.message);
+      return response.status(500).json({
+        error: "Database error",
+        message: "Failed to retrieve user"
+      });
     }
     response.status(200).json(results.rows);
   });
@@ -52,17 +86,34 @@ const getUserById = (request, response) => {
 const getCharacters = (request, response) => {
   pool.query('SELECT * FROM characters ORDER BY elo DESC, first_name ASC', (error, results) => {
     if (error) {
-      throw error;
+      console.error("[ERROR]: cannot SELECT from characters table:", error.message);
+      return response.status(500).json({
+        error: "Database error",
+        message: "Failed to retrieve characters"
+      });
     }
     response.status(200).json(results.rows);
   });
 };
 
 const getCharacterById = (request, response) => {
-  const id = parseInt(request.params.id);
+  const id = request.params.id;
+  
+  if (!id || id.trim() === '') {
+    console.error("[ERROR]: Invalid character ID provided:", id);
+    return response.status(400).json({
+      error: "Invalid input",
+      message: "Character ID is required"
+    });
+  }
+  
   pool.query('SELECT * FROM characters WHERE id = $1', [id], (error, results) => {
     if (error) {
-      throw error;
+      console.error("[ERROR]: cannot SELECT character by ID:", error.message);
+      return response.status(500).json({
+        error: "Database error",
+        message: "Failed to retrieve character"
+      });
     }
     response.status(200).json(results.rows);
   });
@@ -72,12 +123,30 @@ const updateCharacterElo = (request, response) => {
   const id = request.params.id;
   const { wins_change, losses_change, elo_change, recent_change } = request.body;
   
+  // Validate character ID
+  if (!id || id.trim() === '') {
+    console.error("[ERROR]: Invalid character ID provided:", id);
+    return response.status(400).json({
+      error: "Invalid input",
+      message: "Character ID is required"
+    });
+  }
+  
   // Validate that all required fields are present
   if (wins_change === undefined || losses_change === undefined || elo_change === undefined || recent_change === undefined) {
-    console.error(`[ERROR]: missing fields`);
+    console.error(`[ERROR]: missing fields for character ${id}`);
     return response.status(400).json({
       error: 'Missing required fields',
       message: 'All fields are required: wins_change, losses_change, elo_change, recent_change'
+    });
+  }
+  
+  // Validate that the changes are numbers
+  if (isNaN(wins_change) || isNaN(losses_change) || isNaN(elo_change) || isNaN(recent_change)) {
+    console.error(`[ERROR]: non-numeric values provided for character ${id}`);
+    return response.status(400).json({
+      error: 'Invalid input',
+      message: 'All change values must be numbers'
     });
   }
   
@@ -87,13 +156,14 @@ const updateCharacterElo = (request, response) => {
   const invalidFields = providedFields.filter(field => !allowedFields.includes(field));
   
   if (invalidFields.length > 0) {
-    console.error(`[ERROR]: invalid fields`);
+    console.error(`[ERROR]: invalid fields provided for character ${id}:`, invalidFields);
     return response.status(400).json({
       error: 'Invalid fields provided',
       message: `Only these fields are allowed: ${allowedFields.join(', ')}`,
       invalidFields: invalidFields
     });
   }
+  
   const last_change = calculateChange(elo_change, recent_change);
   
   // Use incremental updates to prevent race conditions
@@ -109,20 +179,22 @@ const updateCharacterElo = (request, response) => {
   
   pool.query(query, [wins_change, losses_change, elo_change, last_change, id], (error, results) => {
     if (error) {
-      console.error('Error updating character ELO:', error);
+      console.error(`[ERROR]: Failed to update character ${id}:`, error.message);
       return response.status(500).json({
-        error: 'Failed to update character',
-        message: error.message
+        error: 'Database error',
+        message: 'Failed to update character'
       });
     }
     
     if (results.rows.length === 0) {
+      console.error(`[ERROR]: Character not found: ${id}`);
       return response.status(404).json({
         error: 'Character not found',
         message: `No character found with id: ${id}`
       });
     }
     
+    console.log(`[SUCCESS]: Updated character ${results.rows[0].first_name} (${id})`);
     response.status(200).json({
       message: 'Character ELO updated successfully',
       character: results.rows[0]
@@ -181,8 +253,11 @@ app.get('/image-proxy', async (req, res) => {
     const imageUrl = req.query.url;
     
     if (!imageUrl) {
+      console.error("[ERROR]: Image proxy called without URL parameter");
       return res.status(400).json({ error: 'URL parameter is required' });
     }
+    
+    console.log(`[INFO]: Proxying image: ${imageUrl}`);
     
     const response = await axios({
       method: 'GET',
@@ -204,16 +279,42 @@ app.get('/image-proxy', async (req, res) => {
     response.data.pipe(res);
     
   } catch (error) {
-    console.error('Error proxying image:', error.message);
+    console.error('[ERROR]: Error proxying image:', error.message);
     
     if (error.response && error.response.status === 404) {
       res.status(404).json({ error: 'Image not found' });
     } else if (error.code === 'ECONNABORTED') {
       res.status(504).json({ error: 'Request timeout' });
+    } else if (error.code === 'ENOTFOUND') {
+      res.status(400).json({ error: 'Invalid URL or host not found' });
     } else {
       res.status(500).json({ error: 'Failed to fetch image' });
     }
   }
+});
+
+// Global error handler for unhandled errors
+app.use((error, req, res, next) => {
+  console.error('[ERROR]: Unhandled error:', error.message);
+  console.error(error.stack);
+  
+  if (res.headersSent) {
+    return next(error);
+  }
+  
+  res.status(500).json({
+    error: 'Internal server error',
+    message: 'An unexpected error occurred'
+  });
+});
+
+// Handle 404 for undefined routes
+app.use((req, res) => {
+  console.error(`[ERROR]: 404 - Route not found: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({
+    error: 'Route not found',
+    message: `The requested route ${req.method} ${req.originalUrl} does not exist`
+  });
 });
 
 app.get('/', (req, res) => {
@@ -221,5 +322,35 @@ app.get('/', (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+  console.log(`[SUCCESS]: Server is running on port ${port}`);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('[FATAL]: Uncaught Exception:', error.message);
+  console.error(error.stack);
+  process.exit(1);
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL]: Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
+
+// Graceful shutdown
+process.on('SIGINT', () => {
+  console.log('[INFO]: Received SIGINT. Graceful shutdown...');
+  pool.end(() => {
+    console.log('[INFO]: Database connections closed.');
+    process.exit(0);
+  });
+});
+
+process.on('SIGTERM', () => {
+  console.log('[INFO]: Received SIGTERM. Graceful shutdown...');
+  pool.end(() => {
+    console.log('[INFO]: Database connections closed.');
+    process.exit(0);
+  });
 });
