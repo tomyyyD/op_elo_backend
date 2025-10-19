@@ -10,16 +10,24 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 dotenv.config();
+
+// Determine SSL configuration
+let sslConfig = false;
+if (process.env.NODE_ENV === 'production' || 
+    (process.env.PG_HOST && process.env.PG_HOST.includes('render.com'))) {
+  sslConfig = {
+    rejectUnauthorized: false, // Accept self-signed certificates (Render requirement)
+    require: true
+  };
+}
+
 const pool = new Pool({
   user: process.env.PG_USER,
   host: process.env.PG_HOST,
   database: process.env.PG_DATABASE,
   password: process.env.PG_PASSWORD,
   port: process.env.PG_PORT,
-  ssl: process.env.NODE_ENV === 'production' ? {
-    rejectUnauthorized: true,
-    require: true
-  } : false
+  ssl: sslConfig
 });
 
 // Handle database connection errors
