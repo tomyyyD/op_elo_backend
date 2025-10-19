@@ -6,7 +6,7 @@ const axios = require('axios');
 const { populateCharacters, updateCharacterImagesFromPages } = require('./database_tools');
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 dotenv.config();
 const pool = new Pool({
