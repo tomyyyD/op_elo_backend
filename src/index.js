@@ -3,6 +3,7 @@ const bodyParser = require('body-parser');
 const dotenv = require('dotenv');
 const Pool = require('pg').Pool;
 const axios = require('axios');
+const cors = require('cors');
 const { populateCharacters, updateCharacterImagesFromPages } = require('./database_tools');
 
 const app = express();
@@ -15,6 +16,10 @@ const pool = new Pool({
   database: process.env.PG_DATABASE,
   password: process.env.PG_PASSWORD,
   port: process.env.PG_PORT,
+  ssl: process.env.NODE_ENV === 'production' ? {
+    rejectUnauthorized: true,
+    require: true
+  } : false
 });
 
 // Handle database connection errors
@@ -36,6 +41,11 @@ pool.connect((err, client, release) => {
 
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
+app.use(cors({
+  origin: ['https://op-elo.onrender.com', 'http://localhost:5173'],
+  credentials: true
+}));
 
 function calculateChange(eloChange, recentChange) {  
   // Check if both changes have the same sign (both positive, both negative, or one is zero)
@@ -205,6 +215,7 @@ const updateCharacterImages = async (request, response) => {
 app.get('/characters', getCharacters);
 app.get('/characters/:id', getCharacterById);
 app.put('/characters/:id/elo', updateCharacterElo);
+
 app.post('/scrape-characters', scrapeCharacters);
 app.post('/update-character-images', updateCharacterImages);
 
